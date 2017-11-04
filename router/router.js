@@ -14,6 +14,13 @@ var routes = [
     optionalParams: ['numOfConfirmations']
   },
   {
+    path: '/getTxouts',
+    method: 'post',
+    functionName: 'getTxouts',
+    params: ['txouts'],
+    optionalParams: []
+  },
+  {
     path: '/getAddressesTransactions',
     method: 'post',
     functionName: 'getAddressesTransactions',
