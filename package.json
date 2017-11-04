@@ -5,11 +5,14 @@
   "description": "ColoredCoins Full Node",
   "main": "src/server.js",
   "scripts": {
-    "start": "node ./src/server.js",
+    "start": "node --harmony ./src/server.js",
     "package-mac": "electron-packager . --overwrite --platform=darwin --arch=x64 --icon=assets/coloredcoins.icns --prune=true --ignore=dependencies --ignore=dist --out=dist",
     "package-win": "electron-packager . --overwrite --asar=true --platform=win32 --arch=ia32 --icon=assets/coloredcoins.ico --prune=true --ignore=dependencies --ignore=dist --out=dist --version-string.CompanyName=ColoredCoins.org --version-string.FileDescription=coloredcoins-full-node --version-string.ProductName=\"ColoredCoins Full Node\"",
     "package-winstaller": "node ./installer-scripts/package-winstaller.js",
     "package-linux": "electron-packager . --overwrite --platform=linux --arch=x64 --icon=assets/coloredcoins.png --prune=true --ignore=dependencies --ignore=dist --out=dist"
+  },
+  "engines" : {
+    "node" : ">=6.11.3"
   },
   "keywords": [
     "Colored",
@@ -27,8 +30,9 @@
     "async": "^2.1.4",
     "basic-auth": "^1.1.0",
     "bitcoin-async": "^1.0.0",
-    "bitcoinjs-lib": "3.0.2",
+    "bitcoinjs-lib": "~3.0.2",
     "body-parser": "^1.17.1",
+    "buffer-reverse":  "^1.0.1",
     "cc-get-assets-outputs": "^1.2.0",
     "cc-transaction": "^1.2.0",
     "cors": "^2.8.3",
