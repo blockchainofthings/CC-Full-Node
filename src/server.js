@@ -73,7 +73,12 @@ app.use(function (req, res, next) {
 })
 
 parser.parse(function (info) {
-  console.log('info', info)
+  const redInfo = info.hasOwnProperty('blocks') && info.hasOwnProperty('ccheight') ? {
+    blocks: info.blocks,
+    ccheight: info.ccheight
+  } : info;
+
+  console.log('info', redInfo)
 })
 
 if (sslCredentials) {

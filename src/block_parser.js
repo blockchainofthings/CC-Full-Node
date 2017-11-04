@@ -587,6 +587,20 @@ module.exports = function (args) {
     })
   }
 
+  var getTxouts = function (args, cb) {
+    var txouts = _.cloneDeep(args.txouts)
+    async.each(txouts, function (txout, cb) {
+      redis.hget('utxos', txout.txid + ':' + txout.vout, function (err, assets) {
+        if (err) return cb(err)
+        txout.assets = assets && JSON.parse(assets) || []
+        cb()
+      })
+    }, function (err) {
+      if (err) return cb(err)
+      cb(null, txouts)
+    })
+  }
+
   var transmit = function (args, cb) {
     var txHex = args.txHex
     bitcoin.cmd('sendrawtransaction', [txHex], function(err, res) {
@@ -808,6 +822,7 @@ module.exports = function (args) {
     importAddresses: importAddresses,
     getAddressesUtxos: getAddressesUtxos,
     getUtxos: getUtxos,
+    getTxouts: getTxouts,
     getAddressesTransactions: getAddressesTransactions,
     transmit: transmit,
     getInfo: getInfo,
