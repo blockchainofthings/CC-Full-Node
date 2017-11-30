@@ -11,6 +11,19 @@ var socketio = require('socket.io')
 var cors = require('cors')
 
 var propertiesFilePath = path.join(ospath.data(), 'coloredcoins-full-node', 'properties.conf')
+
+// Look for argument specifying a configuration file
+const cfgArgPrefix = '--config=';
+if (process.argv.length > 2 && process.argv[2].startsWith(cfgArgPrefix)) {
+  let cfgFilePath = process.argv[2].substr(cfgArgPrefix.length);
+
+  if (!cfgFilePath.startsWith('/')) {
+    cfgFilePath = path.join(process.env.PWD, cfgFilePath);
+  }
+
+  propertiesFilePath = cfgFilePath;
+}
+
 var config = require(path.join(__dirname, '/../utils/config.js'))(propertiesFilePath)
 var parser = require(path.join(__dirname, '/../src/block_parser.js'))(config)
 var router = require(path.join(__dirname, '/../router/router.js'))
@@ -72,21 +85,27 @@ app.use(function (req, res, next) {
   res.type('txt').send('Not found')
 })
 
-parser.parse(function (info) {
-  const redInfo = info.hasOwnProperty('blocks') && info.hasOwnProperty('ccheight') ? {
-    blocks: info.blocks,
-    ccheight: info.ccheight
-  } : info;
+if (config.parser.start) {
+  console.log('Starting parser...');
+  parser.parse(function (info) {
+    const redInfo = info.hasOwnProperty('blocks') && info.hasOwnProperty('ccheight') ? {
+      blocks: info.blocks,
+      ccheight: info.ccheight
+    } : info;
 
-  console.log('info', redInfo)
-})
+    console.log('info', redInfo)
+  })
+}
 
-if (sslCredentials) {
-  launchServer('https')
+if (config.server.start) {
+  console.log('Starting server...');
+  if (sslCredentials) {
+    launchServer('https')
 
-  if (config.server.useBoth) {
+    if (config.server.useBoth) {
+      launchServer('http')
+    }
+  } else {
     launchServer('http')
   }
-} else {
-  launchServer('http')
 }
