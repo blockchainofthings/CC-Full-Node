@@ -523,7 +523,7 @@ module.exports = function (args) {
     })
   }
 
-  var parseProcedure = function () {
+  var parseProcedure = function (cb) {
     async.waterfall([
       waitForBitcoind,
       infoPopulate,
@@ -531,33 +531,43 @@ module.exports = function (args) {
       getNextBlock,
       checkNextBlock,
       conditionalParseNextBlock
-    ], finishParsing)
+    ], cb !== undefined ? cb : finishParsing)
   }
 
   var getAddressesUtxos = function (args, cb) {
     var addresses = args.addresses
     var numOfConfirmations = args.numOfConfirmations || 0
-    bitcoin.cmd('getblockcount', [], function(err, count) {
-      if (err) return cb(err)
-      bitcoin.cmd('listunspent', [numOfConfirmations, 99999999, addresses], function (err, utxos) {
+
+    if (args.parseNow) {
+      parseProcedure(doProcessing);
+    }
+    else {
+      doProcessing();
+    }
+
+    function doProcessing () {
+      bitcoin.cmd('getblockcount', [], function (err, count) {
         if (err) return cb(err)
-        async.each(utxos, function (utxo, cb) {
-          redis.hget('utxos', utxo.txid + ':' + utxo.vout, function (err, assets) {
-            if (err) return cb(err)
-            utxo.assets = assets && JSON.parse(assets) || []
-            if (utxo.confirmations) {
-              utxo.blockheight = count - utxo.confirmations + 1
-            } else {
-              utxo.blockheight = -1
-            }
-            cb()
-          })
-        }, function (err) {
+        bitcoin.cmd('listunspent', [numOfConfirmations, 99999999, addresses], function (err, utxos) {
           if (err) return cb(err)
-          cb(null, utxos)
+          async.each(utxos, function (utxo, cb) {
+            redis.hget('utxos', utxo.txid + ':' + utxo.vout, function (err, assets) {
+              if (err) return cb(err)
+              utxo.assets = assets && JSON.parse(assets) || []
+              if (utxo.confirmations) {
+                utxo.blockheight = count - utxo.confirmations + 1
+              } else {
+                utxo.blockheight = -1
+              }
+              cb()
+            })
+          }, function (err) {
+            if (err) return cb(err)
+            cb(null, utxos)
+          })
         })
       })
-    })
+    }
   }
 
   var getUtxos = function (args, cb) {

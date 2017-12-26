@@ -4,7 +4,10 @@ var routes = [
     method: 'post',
     functionName: 'getAddressesUtxos',
     params: ['addresses'],
-    optionalParams: ['numOfConfirmations']
+    optionalParams: [
+      'numOfConfirmations',
+      'parseNow'
+    ]
   },
   {
     path: '/getUtxos',
