@@ -1,12 +1,19 @@
 var routes = [
   {
+    path: '/parseNow',
+    method: 'get',
+    functionName: 'parseNow',
+    params: [],
+    optionalParams: []
+  },
+  {
     path: '/getAddressesUtxos',
     method: 'post',
     functionName: 'getAddressesUtxos',
     params: ['addresses'],
     optionalParams: [
       'numOfConfirmations',
-      'parseNow'
+      'waitForParsing'
     ]
   },
   {
@@ -14,21 +21,28 @@ var routes = [
     method: 'post',
     functionName: 'getUtxos',
     params: ['utxos'],
-    optionalParams: ['numOfConfirmations']
+    optionalParams: [
+      'numOfConfirmations',
+      'waitForParsing'
+    ]
   },
   {
     path: '/getTxouts',
     method: 'post',
     functionName: 'getTxouts',
     params: ['txouts'],
-    optionalParams: []
+    optionalParams: [
+      'waitForParsing'
+    ]
   },
   {
     path: '/getAddressesTransactions',
     method: 'post',
     functionName: 'getAddressesTransactions',
     params: ['addresses'],
-    optionalParams: []
+    optionalParams: [
+      'waitForParsing'
+    ]
   },
   {
     path: '/transmit',

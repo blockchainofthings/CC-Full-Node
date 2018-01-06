@@ -8,6 +8,7 @@ var toposort = require('toposort')
 var redisClient = require('redis')
 var bitcoinRpc = require('bitcoin-async')
 var events = require('events')
+var path = require('path-extra')
 
 var mainnetFirstColoredBlock = 364548
 var testnetFirstColoredBlock = 462320
@@ -20,7 +21,13 @@ var blockStates = {
 
 var label = 'cc-full-node'
 
+var ParseControl = require(path.join(__dirname, '/../src/ParseControl.js'))
+var parseControl
+
+
 module.exports = function (args) {
+  parseControl = new ParseControl(!!args.parser.parseControlLoggingOn)
+
   args = args || {}
   var network = args.network || 'testnet'
   var bitcoinNetwork = (network === 'mainnet') ? bitcoinjs.networks.bitcoin : bitcoinjs.networks.testnet
@@ -534,18 +541,28 @@ module.exports = function (args) {
     ], cb !== undefined ? cb : finishParsing)
   }
 
+  var parseNow = function (args, cb) {
+    if (typeof args === 'function') {
+      cb = args
+      args = null
+    }
+
+    parseControl.doParse(parseProcedure);
+    cb(null, true)
+  }
+
   var getAddressesUtxos = function (args, cb) {
     var addresses = args.addresses
     var numOfConfirmations = args.numOfConfirmations || 0
 
-    if (args.parseNow) {
-      parseProcedure(doProcessing);
+    if (args.waitForParsing) {
+      parseControl.doProcess(innerProcess)
     }
     else {
-      doProcessing();
+      innerProcess()
     }
 
-    function doProcessing () {
+    function innerProcess() {
       bitcoin.cmd('getblockcount', [], function (err, count) {
         if (err) return cb(err)
         bitcoin.cmd('listunspent', [numOfConfirmations, 99999999, addresses], function (err, utxos) {
@@ -573,42 +590,62 @@ module.exports = function (args) {
   var getUtxos = function (args, cb) {
     var reqUtxos = args.utxos
     var numOfConfirmations = args.numOfConfirmations || 0
-    bitcoin.cmd('getblockcount', [], function(err, count) {
-      if (err) return cb(err)
-      bitcoin.cmd('listunspent', [numOfConfirmations, 99999999], function (err, utxos) {
+
+    if (args.waitForParsing) {
+      parseControl.doProcess(innerProcess)
+    }
+    else {
+      innerProcess()
+    }
+
+    function innerProcess() {
+      bitcoin.cmd('getblockcount', [], function (err, count) {
         if (err) return cb(err)
-        utxos = utxos.filter(utxo => reqUtxos.findIndex(reqUtxo => reqUtxo.txid === utxo.txid && reqUtxo.index === utxo.vout) !== -1)
-        async.each(utxos, function (utxo, cb) {
-          redis.hget('utxos', utxo.txid + ':' + utxo.vout, function (err, assets) {
-            if (err) return cb(err)
-            utxo.assets = assets && JSON.parse(assets) || []
-            if (utxo.confirmations) {
-              utxo.blockheight = count - utxo.confirmations + 1
-            } else {
-              utxo.blockheight = -1
-            }
-            cb()
-          })
-        }, function (err) {
+        bitcoin.cmd('listunspent', [numOfConfirmations, 99999999], function (err, utxos) {
           if (err) return cb(err)
-          cb(null, utxos)
+          utxos = utxos.filter(utxo => reqUtxos.findIndex(reqUtxo => reqUtxo.txid === utxo.txid && reqUtxo.index === utxo.vout) !== -1)
+          async.each(utxos, function (utxo, cb) {
+            redis.hget('utxos', utxo.txid + ':' + utxo.vout, function (err, assets) {
+              if (err) return cb(err)
+              utxo.assets = assets && JSON.parse(assets) || []
+              if (utxo.confirmations) {
+                utxo.blockheight = count - utxo.confirmations + 1
+              } else {
+                utxo.blockheight = -1
+              }
+              cb()
+            })
+          }, function (err) {
+            if (err) return cb(err)
+            cb(null, utxos)
+          })
         })
       })
-    })
+    }
   }
 
   var getTxouts = function (args, cb) {
     var txouts = _.cloneDeep(args.txouts)
-    async.each(txouts, function (txout, cb) {
-      redis.hget('utxos', txout.txid + ':' + txout.vout, function (err, assets) {
+
+    if (args.waitForParsing) {
+      parseControl.doProcess(innerProcess)
+    }
+    else {
+      innerProcess()
+    }
+
+    function innerProcess() {
+      async.each(txouts, function (txout, cb) {
+        redis.hget('utxos', txout.txid + ':' + txout.vout, function (err, assets) {
+          if (err) return cb(err)
+          txout.assets = assets && JSON.parse(assets) || []
+          cb()
+        })
+      }, function (err) {
         if (err) return cb(err)
-        txout.assets = assets && JSON.parse(assets) || []
-        cb()
+        cb(null, txouts)
       })
-    }, function (err) {
-      if (err) return cb(err)
-      cb(null, txouts)
-    })
+    }
   }
 
   var transmit = function (args, cb) {
@@ -700,83 +737,105 @@ module.exports = function (args) {
 
   var getAddressesTransactions = function (args, cb) {
     var addresses = args.addresses
-    var next = true
-    var txs = {}
-    var txids = []
-    var skip = 0
-    var count = 10
-    var transactions = {}
 
-    async.whilst(function () { return next }, function (cb) {
-      bitcoin.cmd('listtransactions', [label, count, skip, true], function (err, transactions) {
-        if (err) return cb(err)
-        skip+=count
-        transactions.forEach(function (transaction) {
-          if (~addresses.indexOf(transaction.address) && !~txids.indexOf(transaction.txid)) {
-            txs[transaction.txid] = transaction
-            txids.push(transaction.txid)
-          }
-        })
-        if (transactions.length < count) {
-          next = false
-        }
-        cb()
-      })
-    }, function (err) {
-      if (err) return cb(err)
-      var batch = txids.map(function(txid) { return { 'method': 'getrawtransaction', 'params': [txid] } })
-      bitcoin.cmd('getblockcount', [], function(err, count) {
-        if (err) return cb(err)
-        bitcoin.cmd(batch, function (rawTransaction, cb) {
-          var transaction = decodeRawTransaction(bitcoinjs.Transaction.fromHex(rawTransaction))
-          var tx = txs[transaction.txid]
-          addColoredIOs(transaction, function(err) {
-            transaction.confirmations = tx.confirmations
-            if (transaction.confirmations) {
-              transaction.blockheight = count - transaction.confirmations + 1
-              transaction.blocktime = tx.blocktime * 1000
-            } else {
-              transaction.blockheight = -1
-              transaction.blocktime = tx.timereceived * 1000
-            }
-            transactions[transaction.txid] = transaction
-            cb()
-          })
-        }, function(err) {
+    if (args.waitForParsing) {
+      parseControl.doProcess(innerProcess)
+    }
+    else {
+      innerProcess()
+    }
+
+    function innerProcess() {
+      var next = true
+      var txs = {}
+      var txids = []
+      var skip = 0
+      var count = 10
+      var transactions = {}
+
+      async.whilst(function () {
+        return next
+      }, function (cb) {
+        bitcoin.cmd('listtransactions', [label, count, skip, true], function (err, transactions) {
           if (err) return cb(err)
-
-          var prevOutputIndex = {}
-
-          Object.values(transactions).forEach(function(tx) {
-            tx.vin.forEach(function(vin) {
-              prevOutputIndex[vin.txid] = prevOutputIndex[vin.txid] || []
-              prevOutputIndex[vin.txid].push(vin)
-            })
+          skip += count
+          transactions.forEach(function (transaction) {
+            if (~addresses.indexOf(transaction.address) && !~txids.indexOf(transaction.txid)) {
+              txs[transaction.txid] = transaction
+              txids.push(transaction.txid)
+            }
           })
-
-          var prevOutsBatch = Object.keys(prevOutputIndex).map(function(txid) { return { 'method': 'getrawtransaction', 'params': [txid] } })
-          bitcoin.cmd(prevOutsBatch, function (rawTransaction, cb) {
+          if (transactions.length < count) {
+            next = false
+          }
+          cb()
+        })
+      }, function (err) {
+        if (err) return cb(err)
+        var batch = txids.map(function (txid) {
+          return {'method': 'getrawtransaction', 'params': [txid]}
+        })
+        bitcoin.cmd('getblockcount', [], function (err, count) {
+          if (err) return cb(err)
+          bitcoin.cmd(batch, function (rawTransaction, cb) {
             var transaction = decodeRawTransaction(bitcoinjs.Transaction.fromHex(rawTransaction))
-            var txid = transaction.id
-            prevOutputIndex[transaction.txid].forEach(function(vin) {
-              vin.previousOutput = transaction.vout[vin.vout]
-              if(vin.previousOutput.scriptPubKey && vin.previousOutput.scriptPubKey.addresses) {
-                vin.previousOutput.addresses = vin.previousOutput.scriptPubKey.addresses
+            var tx = txs[transaction.txid]
+            addColoredIOs(transaction, function (err) {
+              transaction.confirmations = tx.confirmations
+              if (transaction.confirmations) {
+                transaction.blockheight = count - transaction.confirmations + 1
+                transaction.blocktime = tx.blocktime * 1000
+              } else {
+                transaction.blockheight = -1
+                transaction.blocktime = tx.timereceived * 1000
               }
+              transactions[transaction.txid] = transaction
+              cb()
             })
-            cb()
-          }, function(err) {
+          }, function (err) {
             if (err) return cb(err)
 
-            Object.values(transactions).forEach(function(tx) {
-              tx.fee = tx.vin.reduce(function(sum, vin) { return sum + vin.previousOutput.value }, 0) - tx.vout.reduce(function(sum, vout) { return sum+ vout.value }, 0)
-              tx.totalsent = tx.vin.reduce(function(sum, vin) { return sum + vin.previousOutput.value }, 0)
+            var prevOutputIndex = {}
+
+            Object.values(transactions).forEach(function (tx) {
+              tx.vin.forEach(function (vin) {
+                prevOutputIndex[vin.txid] = prevOutputIndex[vin.txid] || []
+                prevOutputIndex[vin.txid].push(vin)
+              })
             })
-            cb(null, Object.values(transactions))
+
+            var prevOutsBatch = Object.keys(prevOutputIndex).map(function (txid) {
+              return {'method': 'getrawtransaction', 'params': [txid]}
+            })
+            bitcoin.cmd(prevOutsBatch, function (rawTransaction, cb) {
+              var transaction = decodeRawTransaction(bitcoinjs.Transaction.fromHex(rawTransaction))
+              var txid = transaction.id
+              prevOutputIndex[transaction.txid].forEach(function (vin) {
+                vin.previousOutput = transaction.vout[vin.vout]
+                if (vin.previousOutput.scriptPubKey && vin.previousOutput.scriptPubKey.addresses) {
+                  vin.previousOutput.addresses = vin.previousOutput.scriptPubKey.addresses
+                }
+              })
+              cb()
+            }, function (err) {
+              if (err) return cb(err)
+
+              Object.values(transactions).forEach(function (tx) {
+                tx.fee = tx.vin.reduce(function (sum, vin) {
+                  return sum + vin.previousOutput.value
+                }, 0) - tx.vout.reduce(function (sum, vout) {
+                  return sum + vout.value
+                }, 0)
+                tx.totalsent = tx.vin.reduce(function (sum, vin) {
+                  return sum + vin.previousOutput.value
+                }, 0)
+              })
+              cb(null, Object.values(transactions))
+            })
           })
         })
       })
-    })
+    }
   }
 
   var getBitcoindInfo = function (cb) {
@@ -830,6 +889,7 @@ module.exports = function (args) {
   return {
     parse: parse,
     importAddresses: importAddresses,
+    parseNow: parseNow,
     getAddressesUtxos: getAddressesUtxos,
     getUtxos: getUtxos,
     getTxouts: getTxouts,
