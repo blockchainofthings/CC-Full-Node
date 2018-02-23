@@ -102,9 +102,18 @@ module.exports = function (args) {
         block.height = height
         block.hash = hash
         block.previousblockhash = bufferReverse(block.prevHash).toString('hex')
-        block.transactions = block.transactions.map(function (transaction) {
-          return decodeRawTransaction(transaction)
-        })
+
+        var transactions = [];
+        block.mapTransaction = {};
+
+        block.transactions.forEach(function (transaction) {
+          var decTransact = decodeRawTransaction(transaction);
+          transactions.push(decTransact);
+          block.mapTransaction[decTransact.txid] = decTransact;
+        });
+
+        block.transactions = transactions;
+
         cb(null, block)
       })
     })
@@ -243,12 +252,83 @@ module.exports = function (args) {
   var updateUtxosChanges = function (block, utxosChanges, cb) {
     async.waterfall([
       function (cb) {
+        var txoutAddresses = {};
+        var assetIdAddresses = {};
+        var assetIdFound = false;
+
+        Object.keys(utxosChanges.unused).forEach(function (txout) {
+          if (!(txout in txoutAddresses)) {
+            // Get addresses associated with transaction output
+            var parts = txout.split(':');
+
+            txoutAddresses[txout] = block.mapTransaction[parts[0]].vout[parts[1]].scriptPubKey.addresses;
+          }
+
+          var assetIds = JSON.parse(utxosChanges.unused[txout]).map(function (assetInfo) {
+            return assetInfo.assetId;
+          });
+
+          assetIds.forEach(function (assetId) {
+            if (!(assetId in assetIdAddresses)) {
+              assetIdAddresses[assetId] = txoutAddresses[txout];
+            }
+            else {
+              assetIdAddresses[assetId] = mergeArrays(assetIdAddresses[assetId], txoutAddresses[txout]);
+            }
+
+            assetIdFound = true;
+          });
+        });
+
+        if (assetIdFound) {
+          setAssetAddresses(assetIdAddresses, cb);
+        }
+        else {
+          cb(null);
+        }
+      },
+      function (cb) {
         setTxos(utxosChanges.unused, cb)
       },
       function (cb) {
         updateLastBlock(block.height, block.hash, block.timestamp, cb)
       }
     ], cb)
+  }
+
+  function setAssetAddresses(assetIdAddresses, cb) {
+    async.each(Object.keys(assetIdAddresses), function (assetId, cb) {
+      redis.hget('asset-addresses', assetId, function (err, addresses) {
+        if (err) cb(err);
+
+        if (addresses) {
+          var currentAddresses = JSON.parse(addresses);
+          var updatedAddresses = mergeArrays(currentAddresses, assetIdAddresses[assetId]);
+
+          if (updatedAddresses.length > currentAddresses.length) {
+            redis.hset('asset-addresses', assetId, JSON.stringify(updatedAddresses), cb);
+          }
+          else {
+            cb(null);
+          }
+        }
+        else {
+          redis.hset('asset-addresses', assetId, JSON.stringify(assetIdAddresses[assetId]), cb);
+        }
+      });
+    }, cb);
+  }
+
+  function mergeArrays(ar1, ar2) {
+    var resultAr = ar1.concat([]);
+
+    ar2.forEach(function (element) {
+      if (resultAr.indexOf(element) === -1) {
+        resultAr.push(element);
+      }
+    });
+
+    return resultAr;
   }
 
   var updateParsedMempoolTxids = function (txids, cb) {
@@ -267,13 +347,47 @@ module.exports = function (args) {
     })
   }
 
-  var updateMempoolTransactionUtxosChanges = function (txid, utxosChanges, cb) {
+  var updateMempoolTransactionUtxosChanges = function (transaction, utxosChanges, cb) {
     async.waterfall([
+      function (cb) {
+        var txoutAddresses = {};
+        var assetIdAddresses = {};
+        var assetIdFound = false;
+
+        Object.keys(utxosChanges.unused).forEach(function (txout) {
+          if (!(txout in txoutAddresses)) {
+            // Get addresses associated with transaction output
+            txoutAddresses[txout] = transaction.vout[txout.split(':')[1]].scriptPubKey.addresses;
+          }
+
+          var assetIds = JSON.parse(utxosChanges.unused[txout]).map(function(assetInfo) {
+            return assetInfo.assetId;
+          });
+
+          assetIds.forEach(function (assetId) {
+            if (!(assetId in assetIdAddresses)) {
+              assetIdAddresses[assetId] = txoutAddresses[txout];
+            }
+            else {
+              assetIdAddresses[assetId] = mergeArrays(assetIdAddresses[assetId], txoutAddresses[txout]);
+            }
+
+            assetIdFound = true;
+          });
+        });
+
+        if (assetIdFound) {
+          setAssetAddresses(assetIdAddresses, cb);
+        }
+        else {
+          cb(null);
+        }
+      },
       function (cb) {
         setTxos(utxosChanges.unused, cb)
       },
       function (cb) {
-        updateParsedMempoolTxids([txid], cb)
+        updateParsedMempoolTxids([transaction.txid], cb)
       }
     ], cb)
   }
@@ -413,7 +527,7 @@ module.exports = function (args) {
       newMempoolTransaction.ccdata = [coloredData]
       parseTransaction(newMempoolTransaction, utxosChanges, -1, function (err) {
         if (err) return cb(err)
-        updateMempoolTransactionUtxosChanges(newMempoolTransaction.txid, utxosChanges, cb)
+        updateMempoolTransactionUtxosChanges(newMempoolTransaction, utxosChanges, cb)
       })
     }, function (err) {
       if (err) return cb(err)
