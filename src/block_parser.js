@@ -313,7 +313,7 @@ module.exports = function (args) {
             if (!(address in addressTxouts)) {
               addressTxouts[address] = [txout];
             }
-            else if (addressTxouts[address].find(txout) === -1) {
+            else if (addressTxouts[address].indexOf(txout) === -1) {
               addressTxouts[address].push(txout);
             }
           });
@@ -527,7 +527,7 @@ module.exports = function (args) {
             if (!(address in addressTxouts)) {
               addressTxouts[address] = [txout];
             }
-            else if (addressTxouts[address].find(txout) === -1) {
+            else if (addressTxouts[address].indexOf(txout) === -1) {
               addressTxouts[address].push(txout);
             }
           });
