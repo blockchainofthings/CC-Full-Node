@@ -254,21 +254,31 @@ module.exports = function (args) {
       function (cb) {
         var txoutAddresses = {};
         var assetIdAddresses = {};
-        var assetIdFound = false;
+        var assetIdIssuanceInfo = {};
+        var txidTxouts = {};
+        var addressTxouts = {};
+        var hasTxout = false;
 
         Object.keys(utxosChanges.unused).forEach(function (txout) {
-          if (!(txout in txoutAddresses)) {
-            // Get addresses associated with transaction output
-            var parts = txout.split(':');
+          hasTxout = true;
 
-            txoutAddresses[txout] = block.mapTransaction[parts[0]].vout[parts[1]].scriptPubKey.addresses;
-          }
+          // Get addresses associated with transaction output
+          var parts = txout.split(':');
+          var txid = parts[0];
+          var addresses = block.mapTransaction[txid].vout[parts[1]].scriptPubKey.addresses;
 
-          var assetIds = JSON.parse(utxosChanges.unused[txout]).map(function (assetInfo) {
-            return assetInfo.assetId;
+          txoutAddresses[txout] = addresses;
+
+          // Get assets information
+          var assetInfos = JSON.parse(utxosChanges.unused[txout]);
+          var assetIdAssetInfo = {};
+
+          assetInfos.forEach(function (assetInfo) {
+            assetIdAssetInfo[assetInfo.assetId] = assetInfo;
           });
 
-          assetIds.forEach(function (assetId) {
+          Object.keys(assetIdAssetInfo).forEach(function (assetId) {
+            // Identify addresses associated with assets
             if (!(assetId in assetIdAddresses)) {
               assetIdAddresses[assetId] = txoutAddresses[txout];
             }
@@ -276,12 +286,58 @@ module.exports = function (args) {
               assetIdAddresses[assetId] = mergeArrays(assetIdAddresses[assetId], txoutAddresses[txout]);
             }
 
-            assetIdFound = true;
+            // Identify issuing transactions associated with assets
+            var assetInfo = assetIdAssetInfo[assetId];
+
+            if (!(assetInfo.assetId in assetIdIssuanceInfo)) {
+              assetIdIssuanceInfo[assetInfo.assetId] = {};
+            }
+
+            assetIdIssuanceInfo[assetInfo.assetId][assetInfo.issueTxid] = {
+              divisibility: assetInfo.divisibility,
+              lockStatus: assetInfo.lockStatus,
+              aggregationPolicy: assetInfo.aggregationPolicy
+            };
+          });
+
+          // Identify tx outputs associated with transactions
+          if (!(txid in txidTxouts)) {
+            txidTxouts[txid] = [txout];
+          }
+          else {
+            txidTxouts[txid].push(txout);
+          }
+
+          // Identify tx outputs associated with addresses
+          addresses.forEach(function(address) {
+            if (!(address in addressTxouts)) {
+              addressTxouts[address] = [txout];
+            }
+            else if (addressTxouts[address].find(txout) === -1) {
+              addressTxouts[address].push(txout);
+            }
           });
         });
 
-        if (assetIdFound) {
-          setAssetAddresses(assetIdAddresses, cb);
+        if (hasTxout) {
+          async.waterfall([
+            function (cb) {
+              // Populate asset-addresses hash of local Redis database
+              setAssetAddresses(assetIdAddresses, cb);
+            },
+            function (cb) {
+              // Populate asset-issuance hash of local Redis database
+              setAssetIssuance(assetIdIssuanceInfo, cb);
+            },
+            function (cb) {
+              // Populate transaction-utxos hash of local Redis database
+              setTransactionUtxos(txidTxouts, cb);
+            },
+            function (cb) {
+              // Populate address-utxos hash of local Redis database
+              setAddressUtxos(addressTxouts, cb);
+            }
+          ], cb);
         }
         else {
           cb(null);
@@ -314,6 +370,68 @@ module.exports = function (args) {
         }
         else {
           redis.hset('asset-addresses', assetId, JSON.stringify(assetIdAddresses[assetId]), cb);
+        }
+      });
+    }, cb);
+  }
+
+  function setAssetIssuance(assetIdIssuanceInfo, cb) {
+    async.each(Object.keys(assetIdIssuanceInfo), function (assetId, cb) {
+      redis.hget('asset-issuance', assetId, function (err, issuance) {
+        if (err) cb(err);
+
+        var currentIssuance = issuance ? JSON.parse(issuance) : {};
+
+        Object.keys(assetIdIssuanceInfo[assetId]).forEach(function (txid) {
+          currentIssuance[txid] = assetIdIssuanceInfo[assetId][txid];
+        });
+
+        redis.hset('asset-issuance', assetId, JSON.stringify(currentIssuance), cb);
+      });
+    }, cb);
+  }
+
+  function setTransactionUtxos(txidTxouts, cb) {
+    async.each(Object.keys(txidTxouts), function (txid, cb) {
+      redis.hget('transaction-utxos', txid, function (err, utxos) {
+        if (err) cb(err);
+
+        if (utxos) {
+          var currentUtxos = JSON.parse(utxos);
+          var updatedUtxos = mergeArrays(currentUtxos, txidTxouts[txid]);
+
+          if (updatedUtxos.length > currentUtxos.length) {
+            redis.hset('transaction-utxos', txid, JSON.stringify(updatedUtxos), cb);
+          }
+          else {
+            cb(null);
+          }
+        }
+        else {
+          redis.hset('transaction-utxos', txid, JSON.stringify(txidTxouts[txid]), cb);
+        }
+      });
+    }, cb);
+  }
+
+  function setAddressUtxos(addressTxouts, cb) {
+    async.each(Object.keys(addressTxouts), function (address, cb) {
+      redis.hget('address-utxos', address, function (err, utxos) {
+        if (err) cb(err);
+
+        if (utxos) {
+          var currentUtxos = JSON.parse(utxos);
+          var updatedUtxos = mergeArrays(currentUtxos, addressTxouts[address]);
+
+          if (updatedUtxos.length > currentUtxos.length) {
+            redis.hset('address-utxos', address, JSON.stringify(updatedUtxos), cb);
+          }
+          else {
+            cb(null);
+          }
+        }
+        else {
+          redis.hset('address-utxos', address, JSON.stringify(addressTxouts[address]), cb);
         }
       });
     }, cb);
@@ -352,19 +470,29 @@ module.exports = function (args) {
       function (cb) {
         var txoutAddresses = {};
         var assetIdAddresses = {};
-        var assetIdFound = false;
+        var assetIdIssuanceInfo = {};
+        var txidTxouts = {};
+        var addressTxouts = {};
+        var hasTxout = false;
 
         Object.keys(utxosChanges.unused).forEach(function (txout) {
-          if (!(txout in txoutAddresses)) {
-            // Get addresses associated with transaction output
-            txoutAddresses[txout] = transaction.vout[txout.split(':')[1]].scriptPubKey.addresses;
-          }
+          hasTxout = true;
 
-          var assetIds = JSON.parse(utxosChanges.unused[txout]).map(function(assetInfo) {
-            return assetInfo.assetId;
+          // Get addresses associated with transaction output
+          var addresses = transaction.vout[txout.split(':')[1]].scriptPubKey.addresses;
+
+          txoutAddresses[txout] = addresses;
+
+          // Get assets information
+          var assetInfos = JSON.parse(utxosChanges.unused[txout]);
+          var assetIdAssetInfo = {};
+
+          assetInfos.forEach(function (assetInfo) {
+            assetIdAssetInfo[assetInfo.assetId] = assetInfo;
           });
 
-          assetIds.forEach(function (assetId) {
+          Object.keys(assetIdAssetInfo).forEach(function (assetId) {
+            // Identify addresses associated with assets
             if (!(assetId in assetIdAddresses)) {
               assetIdAddresses[assetId] = txoutAddresses[txout];
             }
@@ -372,12 +500,58 @@ module.exports = function (args) {
               assetIdAddresses[assetId] = mergeArrays(assetIdAddresses[assetId], txoutAddresses[txout]);
             }
 
-            assetIdFound = true;
+            // Identify issuing transactions associated with assets
+            var assetInfo = assetIdAssetInfo[assetId];
+
+            if (!(assetInfo.assetId in assetIdIssuanceInfo)) {
+              assetIdIssuanceInfo[assetInfo.assetId] = {};
+            }
+
+            assetIdIssuanceInfo[assetInfo.assetId][assetInfo.issueTxid] = {
+              divisibility: assetInfo.divisibility,
+              lockStatus: assetInfo.lockStatus,
+              aggregationPolicy: assetInfo.aggregationPolicy
+            };
+          });
+
+          // Identify tx outputs associated with transactions
+          if (!(transaction.txid in txidTxouts)) {
+            txidTxouts[transaction.txid] = [txout];
+          }
+          else {
+            txidTxouts[transaction.txid].push(txout);
+          }
+
+          // Identify tx outputs associated with addresses
+          addresses.forEach(function(address) {
+            if (!(address in addressTxouts)) {
+              addressTxouts[address] = [txout];
+            }
+            else if (addressTxouts[address].find(txout) === -1) {
+              addressTxouts[address].push(txout);
+            }
           });
         });
 
-        if (assetIdFound) {
-          setAssetAddresses(assetIdAddresses, cb);
+        if (hasTxout) {
+          async.waterfall([
+            function (cb) {
+              // Populate asset-addresses hash of local Redis database
+              setAssetAddresses(assetIdAddresses, cb);
+            },
+            function (cb) {
+              // Populate asset-issuance hash of local Redis database
+              setAssetIssuance(assetIdIssuanceInfo, cb);
+            },
+            function (cb) {
+              // Populate transaction-utxos hash of local Redis database
+              setTransactionUtxos(txidTxouts, cb);
+            },
+            function (cb) {
+              // Populate address-utxos hash of local Redis database
+              setAddressUtxos(addressTxouts, cb);
+            }
+          ], cb);
         }
         else {
           cb(null);
