@@ -64,6 +64,55 @@ var routes = [
     functionName: 'importAddresses',
     params: ['addresses'],
     optionalParams: ['reindex']
+  },
+  {
+    path: '/getAssetHolders',
+    method: 'post',
+    functionName: 'getAssetHolders',
+    params: ['assetId'],
+    optionalParams: [
+      'numOfConfirmations',
+      'waitForParsing'
+    ]
+  },
+  {
+    path: '/getAssetBalance',
+    method: 'post',
+    functionName: 'getAssetBalance',
+    params: ['assetId'],
+    optionalParams: [
+      'addresses',
+      'numOfConfirmations',
+      'waitForParsing'
+    ]
+  },
+  {
+    path: '/getAssetIssuance',
+    method: 'post',
+    functionName: 'getAssetIssuance',
+    params: ['assetId'],
+    optionalParams: [
+      'waitForParsing'
+    ]
+  },
+  {
+    path: '/getAssetIssuingAddress',
+    method: 'post',
+    functionName: 'getAssetIssuingAddress',
+    params: ['assetId'],
+    optionalParams: [
+      'waitForParsing'
+    ]
+  },
+  {
+    path: '/getOwningAssets',
+    method: 'post',
+    functionName: 'getOwningAssets',
+    params: ['addresses'],
+    optionalParams: [
+      'numOfConfirmations',
+      'waitForParsing'
+    ]
   }
 ]
 

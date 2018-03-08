@@ -9,6 +9,7 @@ var redisClient = require('redis')
 var bitcoinRpc = require('bitcoin-async')
 var events = require('events')
 var path = require('path-extra')
+var BigNumber = require('bignumber.js');
 
 var mainnetFirstColoredBlock = 364548
 var testnetFirstColoredBlock = 462320
@@ -1162,6 +1163,325 @@ module.exports = function (args) {
     cb(null, info)
   }
 
+  const getAssetHolders = function (args, cb) {
+    const assetId = args.assetId;
+    const numOfConfirmations = args.numOfConfirmations || 0;
+
+    if (args.waitForParsing) {
+      parseControl.doProcess(innerProcess)
+    }
+    else {
+      innerProcess()
+    }
+
+    function innerProcess() {
+      // Get addresses associated with asset
+      redis.hget('asset-addresses', assetId, function (err, strAddresses) {
+        if (err) cb(err);
+
+        if (strAddresses) {
+          const addresses = JSON.parse(strAddresses);
+
+          // Retrieve UTXOs associated with asset addresses
+          bitcoin.cmd('listunspent', [numOfConfirmations, 99999999, addresses], function (err, utxos) {
+            if (err) return cb(err);
+
+            const addressBalance = {};
+
+            async.each(utxos, function (utxo, cb) {
+              // Get assets associated with UTXO
+              redis.hget('utxos', utxo.txid + ':' + utxo.vout, function (err, strAssets) {
+                if (err) return cb(err);
+
+                const assets = strAssets && JSON.parse(strAssets) || [];
+
+                assets.forEach((asset) => {
+                  if (asset.assetId === assetId) {
+                    // Accumulate balance amount of given asset per the address associated with the UTXO
+                    const bnAssetAmount = new BigNumber(asset.amount).dividedBy(Math.pow(10, asset.divisibility));
+
+                    if (!(utxo.address in addressBalance)) {
+                      addressBalance[utxo.address] = bnAssetAmount;
+                    }
+                    else {
+                      addressBalance[utxo.address] = addressBalance[utxo.address].plus(bnAssetAmount);
+                    }
+                  }
+                });
+
+                cb(null);
+              })
+            }, function (err) {
+              if (err) return cb(err);
+
+              // Convert accumulated asset balance amounts to number
+              Object.keys(addressBalance).forEach((address) => {
+                addressBalance[address] = addressBalance[address].toNumber();
+              });
+
+              cb(null, addressBalance);
+            });
+          });
+        }
+        else {
+          // Asset not found. Do not return anything
+          cb(null);
+        }
+      });
+    }
+  };
+
+  const getAssetBalance = function (args, cb) {
+    const assetId = args.assetId;
+    const filterAddresses = args.addresses;
+    const numOfConfirmations = args.numOfConfirmations || 0;
+
+    if (args.waitForParsing) {
+      parseControl.doProcess(innerProcess)
+    }
+    else {
+      innerProcess()
+    }
+
+    function innerProcess() {
+      // Get addresses associated with asset
+      redis.hget('asset-addresses', assetId, function (err, strAddresses) {
+        if (err) cb(err);
+
+        if (strAddresses) {
+          let addresses = JSON.parse(strAddresses);
+
+          if (filterAddresses) {
+            // Only take into account the addresses passed in the call
+            addresses = addresses.filter((address) => filterAddresses.indexOf(address) !== -1);
+          }
+
+          if (addresses.length > 0) {
+            // Retrieve UTXOs associated with asset addresses
+            bitcoin.cmd('listunspent', [numOfConfirmations, 99999999, addresses], function (err, utxos) {
+              if (err) return cb(err);
+
+              let balance = new BigNumber(0);
+
+              async.each(utxos, function (utxo, cb) {
+                // Get assets associated with UTXO
+                redis.hget('utxos', utxo.txid + ':' + utxo.vout, function (err, strAssets) {
+                  if (err) return cb(err);
+
+                  const assets = strAssets && JSON.parse(strAssets) || [];
+
+                  assets.forEach((asset) => {
+                    if (asset.assetId === assetId) {
+                      // Accumulate balance amount
+                      const bnAssetAmount = new BigNumber(asset.amount).dividedBy(Math.pow(10, asset.divisibility));
+
+                      balance = balance.plus(bnAssetAmount);
+                    }
+                  });
+
+                  cb(null);
+                })
+              }, function (err) {
+                if (err) return cb(err);
+
+                // Convert accumulated asset balance amounts to number
+                balance = balance.toNumber();
+
+                cb(null, {
+                  balance: balance
+                });
+              });
+            });
+          }
+          else {
+            // Empty list of addresses. Return zero balance
+            cb(null, {
+              balance: 0
+            });
+          }
+        }
+        else {
+          // Asset not found. Do not return anything
+          cb(null);
+        }
+      });
+    }
+  };
+
+  const getAssetIssuance = function (args, cb) {
+    const assetId = args.assetId;
+
+    if (args.waitForParsing) {
+      parseControl.doProcess(innerProcess)
+    }
+    else {
+      innerProcess()
+    }
+
+    function innerProcess() {
+      // Get transactions used to issue asset
+      redis.hget('asset-issuance', assetId, function (err, strIssuance) {
+        if (err) cb(err);
+
+        const issuance = JSON.parse(strIssuance);
+
+        if (issuance) {
+          const retIssuance = {};
+
+          async.eachSeries(Object.keys(issuance), function (txid, cb) {
+            // Prepare issuance info for this transaction
+            const txIssuance = issuance[txid];
+            const issuanceInfo = {
+              amount: new BigNumber(0),
+              divisibility: txIssuance.divisibility,
+              lockStatus: txIssuance.lockStatus,
+              aggregationPolicy: txIssuance.aggregationPolicy
+            };
+
+            // Compute issued asset amount
+            redis.hget('transaction-utxos', txid, function (err, strUtxos) {
+              if (err) cb(err);
+
+              const utxos = JSON.parse(strUtxos);
+
+              async.each(utxos, function (utxo, cb) {
+                redis.hget('utxos', utxo, function (err, strAssets) {
+                  const assets = JSON.parse(strAssets);
+
+                  assets.forEach((asset) => {
+                    if (asset.assetId === assetId && asset.issueTxid === txid) {
+                      // Accumulate issued asset amount
+                      const bnAssetAmount = new BigNumber(asset.amount).dividedBy(Math.pow(10, asset.divisibility));
+
+                      issuanceInfo.amount = issuanceInfo.amount.plus(bnAssetAmount);
+                    }
+                  });
+
+                  cb(null);
+                });
+              }, function (err) {
+                if (err) cb(err);
+
+                // Convert accumulated asset amount to number and save issuance info
+                //  for this transaction
+                issuanceInfo.amount = issuanceInfo.amount.toNumber();
+
+                retIssuance[txid] = issuanceInfo;
+
+                cb(null)
+              });
+            });
+          }, function (err) {
+            if (err) return cb(err);
+
+            cb(null, retIssuance);
+          });
+        }
+        else {
+          // Asset not found. Do not return anything
+          cb(null);
+        }
+      });
+    }
+  };
+
+  const getAssetIssuingAddress = function (args, cb) {
+    const assetId = args.assetId;
+
+    if (args.waitForParsing) {
+      parseControl.doProcess(innerProcess)
+    }
+    else {
+      innerProcess()
+    }
+
+    function innerProcess() {
+      // Get transactions used to issue asset
+      redis.hget('asset-issuance', assetId, function (err, strIssuance) {
+        if (err) cb(err);
+
+        const issuance = JSON.parse(strIssuance);
+
+        if (issuance) {
+          // Get ID of first issuing transaction
+          const issuingTxid = Object.keys(issuance)[0];
+
+          // Retrieve transaction info
+          bitcoin.cmd('getrawtransaction', [issuingTxid, true], function (err, issuingTx) {
+            if (err) cb(err);
+
+            // Retrieve tx output associated with first input of transaction
+            bitcoin.cmd('getrawtransaction', [issuingTx.vin[0].txid, true], function (err, tx) {
+              if (err) cb(err);
+
+              // Return address associated with tx output
+              cb(null, {
+                address: tx.vout[issuingTx.vin[0].vout].scriptPubKey.addresses[0]
+              });
+            })
+          })
+        }
+        else {
+          // Asset not found. Do not return anything
+          cb(null);
+        }
+      });
+    }
+  };
+
+  const getOwningAssets = function (args, cb) {
+    const addresses = args.addresses ;
+    const numOfConfirmations = args.numOfConfirmations || 0;
+
+    if (args.waitForParsing) {
+      parseControl.doProcess(innerProcess)
+    }
+    else {
+      innerProcess()
+    }
+
+    function innerProcess() {
+      // Retrieve UTXOs associated with given addresses
+      bitcoin.cmd('listunspent', [numOfConfirmations, 99999999, addresses], function (err, utxos) {
+        if (err) return cb(err);
+
+        const assetBalance = {};
+
+        async.each(utxos, function (utxo, cb) {
+          // Get assets associated with UTXO
+          redis.hget('utxos', utxo.txid + ':' + utxo.vout, function (err, strAssets) {
+            if (err) return cb(err);
+
+            const assets = strAssets && JSON.parse(strAssets) || [];
+
+            assets.forEach((asset) => {
+              // Accumulate asset balance amount per asset associated with the UTXO
+              const bnAssetAmount = new BigNumber(asset.amount).dividedBy(Math.pow(10, asset.divisibility));
+
+              if (!(asset.assetId in assetBalance)) {
+                assetBalance[asset.assetId] = bnAssetAmount;
+              }
+              else {
+                assetBalance[asset.assetId] = assetBalance[asset.assetId].plus(bnAssetAmount);
+              }
+            });
+
+            cb(null);
+          })
+        }, function (err) {
+          if (err) return cb(err);
+
+          // Convert accumulated asset balance amounts to number
+          Object.keys(assetBalance).forEach((asset) => {
+            assetBalance[asset] = assetBalance[asset].toNumber();
+          });
+
+          cb(null, assetBalance);
+        });
+      });
+    }
+  };
+
   var injectColoredUtxos = function (method, params, ans, cb) {
     // TODO
     cb(null, ans)
@@ -1184,6 +1504,11 @@ module.exports = function (args) {
     getAddressesTransactions: getAddressesTransactions,
     transmit: transmit,
     getInfo: getInfo,
+    getAssetHolders: getAssetHolders,
+    getAssetBalance: getAssetBalance,
+    getAssetIssuance: getAssetIssuance,
+    getAssetIssuingAddress: getAssetIssuingAddress,
+    getOwningAssets: getOwningAssets,
     proxyBitcoinD: proxyBitcoinD,
     emitter: emitter
   }

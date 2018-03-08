@@ -1,5 +1,5 @@
 // NOTE: this solution assumes that the requested parsing (through the parseNow API end point) is
-//    done on the same process as the API server, even if the automatic parsing in done in a separate
+//    done on the same process as the API server, even if the automatic parsing is done in a separate
 //    process. In the future, it might be worth modifying it so the parsing is done on the same
 //    process where the automatic parsing in done.
 function ParseControl(loggingOn = false) {
