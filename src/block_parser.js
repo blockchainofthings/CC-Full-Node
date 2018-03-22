@@ -1231,6 +1231,10 @@ module.exports = function (args) {
     }
   };
 
+  // Return: {
+  //   total: [Number], - Total balance amount
+  //   unconfirmed: [Number] - Unconfirmed balance amount
+  // }
   const getAssetBalance = function (args, cb) {
     const assetId = args.assetId;
     const filterAddresses = args.addresses;
@@ -1261,7 +1265,8 @@ module.exports = function (args) {
             bitcoin.cmd('listunspent', [numOfConfirmations, 99999999, addresses], function (err, utxos) {
               if (err) return cb(err);
 
-              let balance = new BigNumber(0);
+              let totalBalance = new BigNumber(0);
+              let unconfirmedBalance = new BigNumber(0);
 
               async.each(utxos, function (utxo, cb) {
                 // Get assets associated with UTXO
@@ -1275,7 +1280,11 @@ module.exports = function (args) {
                       // Accumulate balance amount
                       const bnAssetAmount = new BigNumber(asset.amount).dividedBy(Math.pow(10, asset.divisibility));
 
-                      balance = balance.plus(bnAssetAmount);
+                      totalBalance = totalBalance.plus(bnAssetAmount);
+
+                      if (utxo.confirmations === 0) {
+                        unconfirmedBalance = unconfirmedBalance.plus(bnAssetAmount);
+                      }
                     }
                   });
 
@@ -1284,11 +1293,10 @@ module.exports = function (args) {
               }, function (err) {
                 if (err) return cb(err);
 
-                // Convert accumulated asset balance amounts to number
-                balance = balance.toNumber();
-
+                // Return balance amounts
                 cb(null, {
-                  balance: balance
+                  total: totalBalance.toNumber(),
+                  unconfirmed: unconfirmedBalance.toNumber()
                 });
               });
             });
@@ -1296,7 +1304,8 @@ module.exports = function (args) {
           else {
             // Empty list of addresses. Return zero balance
             cb(null, {
-              balance: 0
+              total: 0,
+              unconfirmed: 0
             });
           }
         }
@@ -1308,6 +1317,15 @@ module.exports = function (args) {
     }
   };
 
+  // Return: { - A dictionary where the keys are the transaction IDs
+  //   <txid>: {
+  //     amount: [Number], - The amount of asset issued
+  //     divisibility: [Number], - The number of decimal places used to represent the smallest amount of the asset
+  //     lockStatus: [Boolean], - Indicates whether this is a locked (true) or unlocked (false) asset.
+  //     aggregationPolicy: [String] - Indicates whether asset amount from different UTXOs can be summed together.
+  //                                    Valid values: 'aggregatable', 'hybrid', and 'dispersed'
+  //   }
+  // }
   const getAssetIssuance = function (args, cb) {
     const assetId = args.assetId;
 
@@ -1385,6 +1403,9 @@ module.exports = function (args) {
     }
   };
 
+  // Return: {
+  //   address: [String] - The blockchain address used to issued amount of this asset
+  // }
   const getAssetIssuingAddress = function (args, cb) {
     const assetId = args.assetId;
 
@@ -1429,6 +1450,12 @@ module.exports = function (args) {
     }
   };
 
+  // Return: { - A dictionary where the keys are the asset IDs
+  //   <assetId>: {
+  //     totalBalance: [Number], - Total balance amount
+  //     unconfirmedBalance: [Number] - Unconfirmed balance amount
+  //   }
+  // }
   const getOwningAssets = function (args, cb) {
     const addresses = args.addresses ;
     const numOfConfirmations = args.numOfConfirmations || 0;
@@ -1457,12 +1484,22 @@ module.exports = function (args) {
             assets.forEach((asset) => {
               // Accumulate asset balance amount per asset associated with the UTXO
               const bnAssetAmount = new BigNumber(asset.amount).dividedBy(Math.pow(10, asset.divisibility));
+              let balance;
 
               if (!(asset.assetId in assetBalance)) {
-                assetBalance[asset.assetId] = bnAssetAmount;
+                balance = assetBalance[asset.assetId] = {
+                  totalBalance: new BigNumber(0),
+                  unconfirmedBalance: new BigNumber(0)
+                };
               }
               else {
-                assetBalance[asset.assetId] = assetBalance[asset.assetId].plus(bnAssetAmount);
+                balance = assetBalance[asset.assetId];
+              }
+
+              balance.totalBalance = balance.totalBalance.plus(bnAssetAmount);
+
+              if (utxo.confirmations === 0) {
+                balance.unconfirmedBalance = balance.unconfirmedBalance.plus(bnAssetAmount);
               }
             });
 
@@ -1473,7 +1510,10 @@ module.exports = function (args) {
 
           // Convert accumulated asset balance amounts to number
           Object.keys(assetBalance).forEach((asset) => {
-            assetBalance[asset] = assetBalance[asset].toNumber();
+            let balance = assetBalance[asset];
+
+            balance.totalBalance = balance.totalBalance.toNumber();
+            balance.unconfirmedBalance = balance.unconfirmedBalance.toNumber();
           });
 
           cb(null, assetBalance);
