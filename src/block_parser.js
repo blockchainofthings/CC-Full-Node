@@ -1163,6 +1163,12 @@ module.exports = function (args) {
     cb(null, info)
   }
 
+  // Return: { - A dictionary where the keys are blockchain addresses
+  //   <address>: {
+  //     totalBalance: [Number], - Total balance amount
+  //     unconfirmedBalance: [Number] - Unconfirmed balance amount
+  //   }
+  // }
   const getAssetHolders = function (args, cb) {
     const assetId = args.assetId;
     const numOfConfirmations = args.numOfConfirmations || 0;
@@ -1199,12 +1205,22 @@ module.exports = function (args) {
                   if (asset.assetId === assetId) {
                     // Accumulate balance amount of given asset per the address associated with the UTXO
                     const bnAssetAmount = new BigNumber(asset.amount).dividedBy(Math.pow(10, asset.divisibility));
+                    let balance;
 
                     if (!(utxo.address in addressBalance)) {
-                      addressBalance[utxo.address] = bnAssetAmount;
+                      balance = addressBalance[utxo.address] = {
+                        totalBalance: new BigNumber(0),
+                        unconfirmedBalance: new BigNumber(0)
+                      };
                     }
                     else {
-                      addressBalance[utxo.address] = addressBalance[utxo.address].plus(bnAssetAmount);
+                      balance = addressBalance[utxo.address];
+                    }
+
+                    balance.totalBalance = balance.totalBalance.plus(bnAssetAmount);
+
+                    if (utxo.confirmations === 0) {
+                      balance.unconfirmedBalance = balance.unconfirmedBalance.plus(bnAssetAmount);
                     }
                   }
                 });
@@ -1216,7 +1232,10 @@ module.exports = function (args) {
 
               // Convert accumulated asset balance amounts to number
               Object.keys(addressBalance).forEach((address) => {
-                addressBalance[address] = addressBalance[address].toNumber();
+                let balance = addressBalance[address];
+
+                balance.totalBalance = balance.totalBalance.toNumber();
+                balance.unconfirmedBalance = balance.unconfirmedBalance.toNumber();
               });
 
               cb(null, addressBalance);
