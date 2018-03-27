@@ -1,7 +1,7 @@
 {
   "name": "coloredcoins-full-node",
   "ProductName": "ColoredCoins Full Node",
-  "version": "0.1.15",
+  "version": "0.1.16",
   "description": "ColoredCoins Full Node",
   "main": "src/server.js",
   "scripts": {
