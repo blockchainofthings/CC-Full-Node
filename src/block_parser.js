@@ -1487,57 +1487,63 @@ module.exports = function (args) {
     }
 
     function innerProcess() {
-      // Retrieve UTXOs associated with given addresses
-      bitcoin.cmd('listunspent', [numOfConfirmations, 99999999, addresses], function (err, utxos) {
-        if (err) return cb(err);
-
-        const assetBalance = {};
-
-        async.each(utxos, function (utxo, cb) {
-          // Get assets associated with UTXO
-          redis.hget('utxos', utxo.txid + ':' + utxo.vout, function (err, strAssets) {
-            if (err) return cb(err);
-
-            const assets = strAssets && JSON.parse(strAssets) || [];
-
-            assets.forEach((asset) => {
-              // Accumulate asset balance amount per asset associated with the UTXO
-              const bnAssetAmount = new BigNumber(asset.amount).dividedBy(Math.pow(10, asset.divisibility));
-              let balance;
-
-              if (!(asset.assetId in assetBalance)) {
-                balance = assetBalance[asset.assetId] = {
-                  totalBalance: new BigNumber(0),
-                  unconfirmedBalance: new BigNumber(0)
-                };
-              }
-              else {
-                balance = assetBalance[asset.assetId];
-              }
-
-              balance.totalBalance = balance.totalBalance.plus(bnAssetAmount);
-
-              if (utxo.confirmations === 0) {
-                balance.unconfirmedBalance = balance.unconfirmedBalance.plus(bnAssetAmount);
-              }
-            });
-
-            cb(null);
-          })
-        }, function (err) {
+      if (addresses.length > 0) {
+        // Retrieve UTXOs associated with given addresses
+        bitcoin.cmd('listunspent', [numOfConfirmations, 99999999, addresses], function (err, utxos) {
           if (err) return cb(err);
 
-          // Convert accumulated asset balance amounts to number
-          Object.keys(assetBalance).forEach((asset) => {
-            let balance = assetBalance[asset];
+          const assetBalance = {};
 
-            balance.totalBalance = balance.totalBalance.toNumber();
-            balance.unconfirmedBalance = balance.unconfirmedBalance.toNumber();
+          async.each(utxos, function (utxo, cb) {
+            // Get assets associated with UTXO
+            redis.hget('utxos', utxo.txid + ':' + utxo.vout, function (err, strAssets) {
+              if (err) return cb(err);
+
+              const assets = strAssets && JSON.parse(strAssets) || [];
+
+              assets.forEach((asset) => {
+                // Accumulate asset balance amount per asset associated with the UTXO
+                const bnAssetAmount = new BigNumber(asset.amount).dividedBy(Math.pow(10, asset.divisibility));
+                let balance;
+
+                if (!(asset.assetId in assetBalance)) {
+                  balance = assetBalance[asset.assetId] = {
+                    totalBalance: new BigNumber(0),
+                    unconfirmedBalance: new BigNumber(0)
+                  };
+                }
+                else {
+                  balance = assetBalance[asset.assetId];
+                }
+
+                balance.totalBalance = balance.totalBalance.plus(bnAssetAmount);
+
+                if (utxo.confirmations === 0) {
+                  balance.unconfirmedBalance = balance.unconfirmedBalance.plus(bnAssetAmount);
+                }
+              });
+
+              cb(null);
+            })
+          }, function (err) {
+            if (err) return cb(err);
+
+            // Convert accumulated asset balance amounts to number
+            Object.keys(assetBalance).forEach((asset) => {
+              let balance = assetBalance[asset];
+
+              balance.totalBalance = balance.totalBalance.toNumber();
+              balance.unconfirmedBalance = balance.unconfirmedBalance.toNumber();
+            });
+
+            cb(null, assetBalance);
           });
-
-          cb(null, assetBalance);
         });
-      });
+      }
+      else {
+        // An empty list of addresses has been passed. Do not return anything
+        cb(null);
+      }
     }
   };
 
