@@ -1336,6 +1336,112 @@ module.exports = function (args) {
     }
   };
 
+  // Return: { - A dictionary where the keys are the asset IDs
+  //   <assetId>: {
+  //     totalBalance: [Number], - Total balance amount
+  //     unconfirmedBalance: [Number] - Unconfirmed balance amount
+  //   }
+  // }
+  const getMultiAssetBalance = function (args, cb) {
+    const assetIds = args.assetIds;
+    const filterAddresses = args.addresses;
+    const numOfConfirmations = args.numOfConfirmations || 0;
+
+    if (args.waitForParsing) {
+      parseControl.doProcess(innerProcess)
+    }
+    else {
+      innerProcess()
+    }
+
+    function innerProcess() {
+      if (assetIds.length > 0) {
+        const assetBalance = {};
+
+        async.each(assetIds, function (assetId, cb) {
+          // Get addresses associated with asset
+          redis.hget('asset-addresses', assetId, function (err, strAddresses) {
+            if (err) cb(err);
+
+            if (strAddresses) {
+              let addresses = JSON.parse(strAddresses);
+
+              if (filterAddresses) {
+                // Only take into account the addresses passed in the call
+                addresses = addresses.filter((address) => filterAddresses.indexOf(address) !== -1);
+              }
+
+              if (addresses.length > 0) {
+                // Retrieve UTXOs associated with asset addresses
+                bitcoin.cmd('listunspent', [numOfConfirmations, 99999999, addresses], function (err, utxos) {
+                  if (err) return cb(err);
+
+                  let totalBalance = new BigNumber(0);
+                  let unconfirmedBalance = new BigNumber(0);
+
+                  async.each(utxos, function (utxo, cb) {
+                    // Get assets associated with UTXO
+                    redis.hget('utxos', utxo.txid + ':' + utxo.vout, function (err, strAssets) {
+                      if (err) return cb(err);
+
+                      const assets = strAssets && JSON.parse(strAssets) || [];
+
+                      assets.forEach((asset) => {
+                        if (asset.assetId === assetId) {
+                          // Accumulate balance amount
+                          const bnAssetAmount = new BigNumber(asset.amount).dividedBy(Math.pow(10, asset.divisibility));
+
+                          totalBalance = totalBalance.plus(bnAssetAmount);
+
+                          if (utxo.confirmations === 0) {
+                            unconfirmedBalance = unconfirmedBalance.plus(bnAssetAmount);
+                          }
+                        }
+                      });
+
+                      cb(null);
+                    })
+                  }, function (err) {
+                    if (err) return cb(err);
+
+                    // Save asset balance to be returned
+                    assetBalance[assetId] = {
+                      total: totalBalance.toNumber(),
+                      unconfirmed: unconfirmedBalance.toNumber()
+                    };
+
+                    cb(null);
+                  });
+                });
+              }
+              else {
+                // Empty list of addresses. Save asset balance as zero to be returned
+                assetBalance[assetId] = {
+                  total: 0,
+                  unconfirmed: 0
+                };
+
+                cb(null);
+              }
+            }
+            else {
+              // Asset not found. Do not do anything
+              cb(null);
+            }
+          });
+        }, function (err) {
+          if (err) return cb(err);
+
+          cb(null, assetBalance);
+        });
+      }
+      else {
+        // An empty list of asset IDs has been passed. Do not return anything
+        cb(null);
+      }
+    }
+  };
+
   // Return: { - A dictionary where the keys are the transaction IDs
   //   <txid>: {
   //     amount: [Number], - The amount of asset issued
@@ -1571,6 +1677,7 @@ module.exports = function (args) {
     getInfo: getInfo,
     getAssetHolders: getAssetHolders,
     getAssetBalance: getAssetBalance,
+    getMultiAssetBalance: getMultiAssetBalance,
     getAssetIssuance: getAssetIssuance,
     getAssetIssuingAddress: getAssetIssuingAddress,
     getOwningAssets: getOwningAssets,

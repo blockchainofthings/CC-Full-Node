@@ -87,6 +87,17 @@ var routes = [
     ]
   },
   {
+    path: '/getMultiAssetBalance',
+    method: 'post',
+    functionName: 'getMultiAssetBalance',
+    params: ['assetIds'],
+    optionalParams: [
+      'addresses',
+      'numOfConfirmations',
+      'waitForParsing'
+    ]
+  },
+  {
     path: '/getAssetIssuance',
     method: 'post',
     functionName: 'getAssetIssuance',
